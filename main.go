@@ -38,7 +38,7 @@ import (
 var regGo = regexp.MustCompile(".*\\.go$")
 
 func goLikeFile(path string, fi os.FileInfo) bool {
-	return fi != nil && fi.Mode().IsRegular() && regGo.Match([]byte(path)) && !strings.Contains(path, "vendor/")
+	return fi != nil && fi.Mode().IsRegular() && regGo.Match([]byte(path)) && !strings.Contains(path, "vendor/") && !strings.HasSuffix(path, "doc.go")
 }
 
 var blankTime time.Time
@@ -49,8 +49,10 @@ func main() {
 	var fixIt bool
 	var copyrightHolder string
 	var concurrency uint
+	var tmplStr string
 
 	flag.StringVar(&goRepo, "repo", "github.com/orijtech/apache2conform", "the go repo to use")
+	flag.StringVar(&tmplStr, "tmpl", "apache2.0", "the license to use, options are: apache2.0, BSD")
 	flag.BoolVar(&fixIt, "fix", false, "whether to add the headers")
 	flag.StringVar(&copyrightHolder, "copyright-holder", "ACME", "the name of the copyright holder")
 	flag.UintVar(&concurrency, "concurrency", 6, "controls how many files can be opened at once")
@@ -60,6 +62,14 @@ func main() {
 	defer func() {
 		fmt.Printf("\nTimeSpent: %s\n", time.Now().Sub(startTime))
 	}()
+
+	var tmpl *template.Template
+	switch strings.ToLower(tmplStr) {
+	case "bsd":
+		tmpl = shortBSDTempl
+	default:
+		tmpl = shortApache2Point0Templ
+	}
 
 	dirPath := os.ExpandEnv(filepath.Join("$GOPATH", "src", goRepo))
 	repo, err := git.PlainOpen(dirPath)
@@ -90,6 +100,7 @@ func main() {
 				fixIt:      fixIt,
 				filePath:   goFile,
 				headCommit: headCommit,
+				tmpl:       tmpl,
 			}
 		}
 	}()
@@ -122,6 +133,7 @@ type licenseConformer struct {
 	filePath   string
 	fixIt      bool
 	headCommit *object.Commit
+	tmpl       *template.Template
 }
 
 var _ semalim.Job = (*licenseConformer)(nil)
@@ -184,7 +196,7 @@ func (lc *licenseConformer) Do() (res interface{}, err error) {
 
 		Holder: copyrightHolder,
 	}
-	if err := shortApache2Point0Templ.Execute(buf, info); err != nil {
+	if err := lc.tmpl.Execute(buf, info); err != nil {
 		return false, err
 	}
 	// Next step is to concatenate the (license, sniff, rest)
@@ -252,6 +264,12 @@ func siftThroughFiles(root string, match func(string, os.FileInfo) bool) chan st
 
 const approxShortHeaderSize = 624
 
+var shortBSD = `// Copyright {{.Year}} {{.Holder}}. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+`
+
 var shortApache2Point0 = `// Copyright {{.Year}} {{.Holder}}. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -268,3 +286,4 @@ var shortApache2Point0 = `// Copyright {{.Year}} {{.Holder}}. All Rights Reserve
 
 `
 var shortApache2Point0Templ = template.Must(template.New("apache2.0").Parse(shortApache2Point0))
+var shortBSDTempl = template.Must(template.New("BSD").Parse(shortBSD))
